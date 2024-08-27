@@ -466,7 +466,7 @@ class Quantify:
             if self.genome.get_genome_type() == "host":
                 tpm_cmd += ["-e"]
             if self.genome.get_genome_type() == "bacteria":
-                tpm_cmd += ["-k", "gene_name"]
+                tpm_cmd += ["-k", "gene_id"]
             tpm_output = os.path.join(
                 self.genome.get_sample_path(sample.get_id()), "tpm_counts.tsv"
             )
@@ -495,7 +495,6 @@ class Quantify:
         sample.add_command("tpmcalc_" + self.genome.get_id(), cmd, "running")
         print("Running command:\n{0}\n".format(" ".join(cmd)))
         try:
-            # TODO: ENABLE
             subprocess.check_call(cmd)
             sample.set_command_status(
                 "tpmcalc" + "_" + self.genome.get_id(), "finished"
@@ -571,7 +570,6 @@ class Quantify:
         sample.add_command("htseq" + "_" + self.genome.get_id(), cmd, "running")
         print("Running command:\n{0}\n".format(" ".join(cmd)))
         try:
-            # TODO: ENABLE
             with open(output_file, "w") as o, open(err_file, "w") as e:
                 subprocess.check_call(cmd, stdout=o, stderr=e)
             sample.set_command_status(

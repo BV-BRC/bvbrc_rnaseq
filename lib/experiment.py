@@ -196,11 +196,16 @@ class Genome:
         try:
             print(" ".join(gff_to_gtf_cmd))
             gtg_proc = subprocess.Popen(gff_to_gtf_cmd, stdout=subprocess.PIPE)
-            gtf_text = gtg_proc.stdout.read().decode()
-            # gtf_text.replace('gene_name','gene_id')
-            gtf_text = gtf_text.replace("CDS", "exon")
+            gtf_text_lines = gtg_proc.stdout.read().decode().split('\n')
+            gtf_text = []
+            for line in gtf_text_lines:
+                line = line.strip() 
+                if 'gene_id' in line:
+                    gtf_text.append(line)
+            gtf_text = '\n'.join(gtf_text).replace("\ttranscript\t", "\texon\t")
             with open(gtf_output, "w") as o:
                 o.write(gtf_text)
+                o.write('\n')
             self.add_genome_data("gtf", gtf_output)
         except Exception as e:
             sys.stderr.write("Error converting gff to gtf:\n{0}\n".format(e))

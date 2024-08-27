@@ -131,8 +131,6 @@ sub process_rnaseq {
     # my $tmpdir = File::Temp->newdir();
     my $tmpdir = File::Temp->newdir( CLEANUP => 1 );
     # my $tmpdir = File::Temp->newdir( CLEANUP => 0 );
-    # my $tmpdir = "/tmp/RNApubref";
-    # my $tmpdir = "/tmp/RNAuser";
     system("chmod", "755", "$tmpdir");
     print STDERR "$tmpdir\n";
     ###localize_params for regular script
