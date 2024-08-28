@@ -31,9 +31,6 @@ exit $rc;
 # my $temp_params = JSON::decode_json(`cat /home/fangfang/P3/dev_container/modules/app_service/test_data/rna.inp`);
 # process_rnaseq('RNASeq', undef, undef, $temp_params);
 
-# Return value: moved to global scope to work properly
-my $run_ret_val = 0;
-
 # flag for if localize_params is called, will remove the localized params after run finishes and before submitting to users workspace
 my $called_localize_params = 0;
 
@@ -146,18 +143,19 @@ sub process_rnaseq {
     $params->{experimental_conditions} //= [];
     $params->{contrasts} //= [];
     
-    my @outputs;
+    my $outputs;
+    my $run_succeeded;
     my $prefix = $recipe;
     my $host = 0;
     if ($recipe eq 'cufflinks' || $recipe eq 'HTSeq-DESeq') {
-        @outputs = run_bvbrc_rnaseq($params, $tmpdir, $host, $parallel);
+        ($outputs, $run_succeeded) = run_bvbrc_rnaseq($params, $tmpdir, $host, $parallel);
     } elsif ($recipe eq 'Host') {
         $host = 1;
-        @outputs = run_bvbrc_rnaseq($params, $tmpdir, $host, $parallel);
+        ($outputs, $run_succeeded) = run_bvbrc_rnaseq($params, $tmpdir, $host, $parallel);
     } else {
         die "Unrecognized recipe: $recipe \n";
     }
-    print STDERR '\@outputs = '. Dumper(\@outputs);
+    print STDERR 'run_succeeded=$run_succeeded outputs = '. Dumper($outputs);
 
     # remove localized params (just the downloaded read files)
     if ($called_localize_params) {
@@ -171,7 +169,7 @@ sub process_rnaseq {
     #
     # Create folders first.
     #
-    for my $fent (grep { $_->[1] eq 'folder' } @outputs)
+    for my $fent (grep { $_->[1] eq 'folder' } @$outputs)
     {
 	my $folder = $fent->[0];
 	my $file = basename($folder);
@@ -208,7 +206,7 @@ sub process_rnaseq {
 	    }
 	}
     }
-    for my $output (@outputs)
+    for my $output (@$outputs)
     {
 	my($ofile, $type) = @$output;
 	next if $type eq 'folder';
@@ -258,8 +256,8 @@ sub process_rnaseq {
     save_output_files($app,$outdir);
     write_output("Start: $time1"."End:   $time2", "$tmpdir/DONE");
 
-    if (!$run_ret_val) {
-	    die "Error running prok_tuxedo.py: saved any output to user's workspace\n";
+    if (!$run_succeeded) {
+	die "RNAseq processing failed: saved any output to user's workspace\n";
     }
 }
 
@@ -335,19 +333,21 @@ sub run_bvbrc_rnaseq {
     #push @cmd, ("-L", join(",", map { s/^\W+//; s/\W+$//; s/\W+/_/g; $_ } @$labels)) if $labels && @$labels;
     #push @cmd, map { my @s = @$_; join(",", map { join("%", @$_) } @s) } @$exps;
     
-    print STDERR "cmd = ", join(" ", @cmd) . "\n\n";
+    print STDERR "Starting RNASeq run: @cmd\n";
     
     #
     # Run directly with IPC::Run so that stdout/stderr can flow in realtime to the
     # output collection infrastructure.
     #
-    #my $ok = run(\@cmd);
-    $run_ret_val = run(\@cmd);
+
+    my $run_ret_val = run(\@cmd);
     if (!$run_ret_val)
     {
-	    print "Error $? running @cmd\n";
+	print "Error $? running @cmd\n";
     }
-    
+
+    print STDERR "Finished RNAseq run. Success=$run_ret_val\n";
+
     #    my ($rc, $out, $err) = run_cmd(\@cmd);
     #    print STDERR "STDOUT:\n$out\n";
     #    print STDERR "STDERR:\n$err\n";
@@ -404,7 +404,7 @@ sub run_bvbrc_rnaseq {
     push @outputs, [ $diffexp_file, 'job_result' ] if -s $diffexp_file;
     push @outputs, [ $diffexp_folder, 'folder' ] if -e $diffexp_folder and -d $diffexp_folder;
     
-    return @outputs;
+    return (\@outputs, $run_ret_val);
 }
 
 sub run_rockhopper {
