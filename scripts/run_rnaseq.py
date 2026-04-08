@@ -19,6 +19,29 @@ from bvbrc_api import authenticateByEnv
 valid_recipes = ["HTSeq-DESeq", "cufflinks", "Host"]
 
 
+def validate_job_data(job_data):
+    """Validate required fields in job JSON before pipeline starts."""
+    errors = []
+    for field in ["reference_genome_id", "genome_type", "recipe", "output_path"]:
+        if field not in job_data:
+            errors.append("Missing required field: {0}".format(field))
+    if "genome_type" in job_data and job_data["genome_type"] not in ["bacteria", "host"]:
+        errors.append("Invalid genome_type: {0}".format(job_data["genome_type"]))
+    if "recipe" in job_data and job_data["recipe"] not in valid_recipes:
+        errors.append("Invalid recipe: {0}".format(job_data["recipe"]))
+    # Validate contrasts structure if present
+    contrasts = job_data.get("contrasts")
+    if contrasts is not None:
+        for i, con in enumerate(contrasts):
+            if not isinstance(con, list) or len(con) < 2:
+                errors.append("Contrast {0} must be a list of 2 condition names".format(i))
+    if errors:
+        sys.stderr.write("Job validation errors:\n")
+        for e in errors:
+            sys.stderr.write("  - {0}\n".format(e))
+        sys.exit(1)
+
+
 def main(
     genome, experiment_dict, tool_params, output_dir, comparisons, session, map_args
 ):
@@ -55,8 +78,7 @@ def main(
         report_stats["num_samples"] = sample_count
         report_stats["num_conditions"] = condition_count
         report_stats["recipe"] = map_args.recipe
-        report_stats["reads_errors"] = reads_errors
-        report_stats["read_failure"] = True
+        report_stats["reads_failure"] = reads_errors
         report_manager.run_multiqc(output_dir)
         report_manager.create_report(
             genome,
@@ -68,12 +90,16 @@ def main(
         )
         sys.exit(0)
 
-    # Trimming
-    # TODO: replace threads with tool_params value
+    # Trimming (non-fatal: use original reads as fallback on failure)
     if map_args.trimming:
         for condition in experiment_dict:
             for sample in experiment_dict[condition].get_sample_list():
-                preprocess.run_trimming(sample, 8)
+                trim_result = preprocess.run_trimming(sample, 8)
+                if trim_result is False:
+                    sys.stderr.write(
+                        f"Warning: trimming failed for sample {sample.get_id()}, "
+                        "continuing with original reads\n"
+                    )
 
     # Sampled align against genome
     # TODO: assess strandedness with one genome?
@@ -128,15 +154,18 @@ def main(
         sys.exit(0)
 
     # HTSeq(bacteria), Stringtie(host)
-    # TODO: some sort of check to make sure everything finished
-    # TODO: test host paired
     quantifier = process.Quantify()
     quantifier.set_genome(genome)
     quantifier.set_recipe(map_args.recipe)
-    condition_output_list = quantifier.run_quantification(sample_list, 8, output_dir)
+    quant_result = quantifier.run_quantification(sample_list, 8, output_dir)
+    if quant_result is False:
+        sys.stderr.write("Quantification failed: check logs\n")
+        sys.exit(1)
     genome_quant_file = quantifier.create_genome_counts_table(output_dir, sample_list)
+    if genome_quant_file is None:
+        sys.stderr.write("Failed to create genome counts table: check logs\n")
+        sys.exit(1)
     genome.add_genome_data("counts_table", genome_quant_file)
-    # TODO: test host
     genome_quant_file = quantifier.create_genome_quant_table(output_dir, sample_list)
 
     # sample_list used in function below
@@ -154,10 +183,14 @@ def main(
         diffexp_import = process.DiffExpImport()
         diffexp_import.set_recipe(map_args.recipe)
         diff_exp.set_genome(genome)
-        diff_exp.run_differential_expression(output_dir, sample_list)
-        if genome.get_genome_type() == "bacteria":
+        diffexp_result = diff_exp.run_differential_expression(output_dir, sample_list)
+        if diffexp_result is False:
+            sys.stderr.write("Warning: differential expression analysis failed, continuing pipeline\n")
+        elif genome.get_genome_type() == "bacteria":
             diffexp_import.set_genome(genome)
-            diffexp_import.run_diff_exp_import(output_dir, map_args)
+            import_result = diffexp_import.run_diff_exp_import(output_dir, map_args)
+            if import_result is False:
+                sys.stderr.write("Warning: differential expression import failed, continuing pipeline\n")
 
     # Queries: subsystems, kegg
     # output files are used in creating figures
@@ -259,7 +292,11 @@ def setup(output_dir, experiment_dict, genome):
             print("{0} already exists".format(genome_data_dir))
         genome.setup_genome_database(genome_data_dir)
     """
-    genome.setup_genome_database()
+    if not genome.setup_genome_database():
+        sys.stderr.write(
+            "Genome database setup failed for {0}: exiting\n".format(genome.get_id())
+        )
+        sys.exit(1)
 
 
 if __name__ == "__main__":
@@ -313,7 +350,7 @@ if __name__ == "__main__":
         "/disks/patric-common/runtime/samtools-1.9/bin:" + os.environ["PATH"]
     )
     os.environ["R_LIBS"] = (
-        "/disks/patric-common/runtime/lib/R/library:" + os.environ["R_LIBS"]
+        "/disks/patric-common/runtime/lib/R/library:" + os.environ.get("R_LIBS", "")
     )
     print("R_LIBS path = {0}".format(os.environ["R_LIBS"]))
 
@@ -329,11 +366,14 @@ if __name__ == "__main__":
         with open(map_args.jfile, "r") as job_handle:
             job_data = json.load(job_handle)
     except Exception as e:
-        print("Error in opening job json file:\n{0}".format(e))
-        sys.exit(0)  # Exception: issue in opening job json file
+        sys.stderr.write("Error in opening job json file:\n{0}\n".format(e))
+        sys.exit(1)
     if not job_data:
-        print("job_data is null")
-        sys.exit(0)  # Exception: issue with loading job_data
+        sys.stderr.write("job_data is null\n")
+        sys.exit(1)
+
+    # Validate job data
+    validate_job_data(job_data)
 
     # Setup session
     s = requests.Session()
@@ -341,8 +381,8 @@ if __name__ == "__main__":
         authenticateByEnv(s)
         print("authentication success")
     except Exception as e:
-        sys.stderr.write("Error during authentication, exiting:\n{0}".format(e))
-        sys.exit(0)
+        sys.stderr.write("Error during authentication, exiting:\n{0}\n".format(e))
+        sys.exit(1)
 
     # load genome ids
     # genome_list = []
@@ -379,7 +419,7 @@ if __name__ == "__main__":
     # sample_list = [] # maybe don't store this, access samples by condition like in original
     experiment_dict = {}
     condition_list = []
-    for cond_str in job_data["experimental_conditions"]:
+    for cond_str in job_data.get("experimental_conditions", []):
         cond_str = cond_str.replace(" ", "_")
         condition_list.append(cond_str)
         new_condition = experiment.Condition(cond_str)
@@ -396,10 +436,15 @@ if __name__ == "__main__":
                     experiment_dict["no_condition"] = no_condition
                 condition = "no_condition"
             condition = condition.replace(" ", "_")
-            sample_reads = [paired_sample["read1"], paired_sample["read2"]]
+            sample_reads = [paired_sample["read1"]]
+            if "read2" in paired_sample:
+                sample_reads.append(paired_sample["read2"])
+                sample_type = "paired"
+            else:
+                sample_type = "single"
             sample_id = paired_sample["sample_id"].replace(" ", "_")
             new_sample = experiment.Sample(
-                sample_id, "paired", sample_reads, None, condition
+                sample_id, sample_type, sample_reads, None, condition
             )
             if condition:
                 experiment_dict[condition].add_sample(new_sample)
@@ -509,7 +554,7 @@ if __name__ == "__main__":
     print("tool_params = {0}".format(tool_params))
 
     comparisons = experiment.Comparison()
-    for con in job_data["contrasts"]:
+    for con in job_data.get("contrasts", []):
         con = [x.replace(" ", "_") for x in con]
         comparisons.add_contrast(con[0], con[1])
 

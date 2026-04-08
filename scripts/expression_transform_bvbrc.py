@@ -13,9 +13,9 @@ from scipy import stats
 from itertools import islice
 from bvbrc_api import authenticateByEnv
 
-# requires 2.7.9 or greater to deal with https comodo intermediate certs
-if sys.version_info < (2, 7):
-    raise "must use python 2.7 or greater"
+# requires python 3
+if sys.version_info < (3, 0):
+    raise Exception("must use python 3 or greater")
 
 # stamp out annoying warnings that are beyond control
 import warnings
@@ -210,6 +210,7 @@ def process_table(
         starting = True
         fileName, fileExtension = os.path.splitext(target_file)
         target_format = fileExtension.replace(".", "").lower()
+    target_sep = None
     if starting and target_format not in set(["csv", "tsv", "xls", "xlsx"]):
         # temp_handle=open(target_file, 'rb')
         temp_handle = open(target_file, "r")
@@ -218,15 +219,13 @@ def process_table(
         )
         temp_handle.close()
     # target_sep shouldn't be empty, but if it is just use tsv
-    if not target_sep:
-        target_sep = {}
-        target_sep["delimeter"] = "\t"
-    if target_sep.delimiter == "\t":
-        target_format = "tsv"
-        sys.stdout.write("guessing " + target_format + " format\n")
-    elif target_sep.delimiter == ",":
-        target_format = "csv"
-        sys.stdout.write("guessing " + target_format + " format\n")
+    if target_sep is not None:
+        if target_sep.delimiter == "\t":
+            target_format = "tsv"
+            sys.stdout.write("guessing " + target_format + " format\n")
+        elif target_sep.delimiter == ",":
+            target_format = "csv"
+            sys.stdout.write("guessing " + target_format + " format\n")
 
     cur_table = None
     next_up = "tsv"
@@ -244,7 +243,7 @@ def process_table(
                 "unrecognized format "
                 + target_format
                 + " for "
-                + target_setup
+                + str(target_setup)
                 + "\n"
             )
             if die:
@@ -326,7 +325,7 @@ def create_comparison_files(
     expression_dict = {"expression": []}
     # create stats table for sample.json
     grouped = comparisons_table.groupby(["sampleUserGivenId"], sort=False)
-    sample_stats = grouped.agg([np.mean, np.std])["log_ratio"]
+    sample_stats = grouped["log_ratio"].agg([np.mean, np.std])
     sample_stats = sample_stats.rename_axis(
         "contrast"
     )  # rename index column title
@@ -340,7 +339,7 @@ def create_comparison_files(
     sample_stats["sampleUserGivenId"] = sample_stats.index
     sample_stats["expname"] = sample_stats.index
     # get zscore and significance columns
-    comparisons_table["z_score"] = grouped.transform(stats.zscore)["log_ratio"]
+    comparisons_table["z_score"] = grouped["log_ratio"].transform(stats.zscore)
     comparisons_table["sig_z"] = comparisons_table["z_score"].abs() >= sig_z
     comparisons_table["sig_log"] = (
         comparisons_table["log_ratio"].abs() >= sig_log
@@ -612,13 +611,13 @@ def main():
 
     # get comparison and metadata files
     xfile = map_args.xfile
-    mfile = map_args.mfile if "mfile" in map_args else None
+    mfile = getattr(map_args, 'mfile', None)
 
     # parse user form data
     form_data = None
     user_parse = None
     server_parse = None
-    parse_server = json.loads if "sstring" in map_args else json.load
+    parse_server = json.loads if getattr(map_args, 'sstring', None) else json.load
 
     try:
         form_data = (

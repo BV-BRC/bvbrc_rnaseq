@@ -157,7 +157,7 @@ sub process_rnaseq {
     } else {
         die "Unrecognized recipe: $recipe \n";
     }
-    print STDERR 'run_succeeded=$run_succeeded outputs = '. Dumper($outputs);
+    print STDERR "run_succeeded=$run_succeeded outputs = ". Dumper($outputs);
 
     # remove localized params (just the downloaded read files)
     if ($called_localize_params) {
@@ -167,6 +167,7 @@ sub process_rnaseq {
     if ($disable_workspace_upload) {
         die "disable_workspace_upload is true: terminating job before upload\n";
     }
+    # die "stopping job before upload\n";
 
     #
     # Create folders first.
@@ -381,7 +382,7 @@ sub run_bvbrc_rnaseq {
 	    #
 	    # Suffix/type list for output
 	    #
-	    my @types = (['.bam', 'bam'], ['.bai', 'bai'], ,['.gtf', 'gff'], ['.html', 'html'], ['_tracking', 'txt']);
+	    my @types = (['.bam', 'bam'], ['.bai', 'bai'], ['.gtf', 'gff'], ['.html', 'html'], ['_tracking', 'txt']);
 	    for my $t (@types)
 	    {
 		my($suffix, $type) = @$t;
@@ -607,6 +608,12 @@ sub prepare_ref_data_rocket {
         my $url = $api_url;
         # my $url = $ftp_url;
         my $out = curl_text($url);
+
+        # Validate that the GFF output looks like actual GFF data (tab-separated lines)
+        if ($out !~ /\t/) {
+            die "Error: GFF response for genome $gid does not appear to be valid GFF data. Response begins with:\n" . substr($out, 0, 500) . "\n";
+        }
+
         write_output($out, "$dir/$gid.gff");
 
         # get list of valid accessions
@@ -619,6 +626,10 @@ sub prepare_ref_data_rocket {
         }
         my $accession_str = join(",", keys %unique_accessions);
 
+        if (!$accession_str) {
+            die "Error: No valid accessions found in GFF data for genome $gid\n";
+        }
+
         $api_url = "$data_url/genome_sequence/?eq(genome_id,$gid)&http_accept=application/sralign+dna+fasta&limit(25000)&in(accession,($accession_str))";
         $ftp_url = "$ftp_base_url/genomes/$gid/$gid.fna";
 
@@ -627,6 +638,12 @@ sub prepare_ref_data_rocket {
         my $out = curl_text($url);
         # $out = break_fasta_lines($out."\n");
         $out =~ s/\n+/\n/g;
+
+        # Validate that the FASTA output looks like actual FASTA data
+        if ($out !~ /^>/) {
+            die "Error: FASTA response for genome $gid does not appear to be valid FASTA data. Response begins with:\n" . substr($out, 0, 500) . "\n";
+        }
+
         write_output($out, "$dir/$gid.fna");
     }
     
@@ -767,14 +784,21 @@ sub curl_options {
     my $token = get_token()->token;
     push(@opts, "-H", "Authorization: $token");
     push(@opts, "-H", "Content-Type: multipart/form-data");
+    push(@opts, "--fail", "--show-error");
+    push(@opts, "--retry", "3");
     return @opts;
 }
 
 sub run_cmd {
     my ($cmd) = @_;
     my ($out, $err);
-    run($cmd, '>', \$out, '2>', \$err)
-        or die "Error running cmd=@$cmd, stdout:\n$out\nstderr:\n$err\n";
+    if (!run($cmd, '>', \$out, '2>', \$err)) {
+        my $max_out = 500;
+        my $truncated_out = length($out) > $max_out
+            ? substr($out, 0, $max_out) . "\n... [truncated, " . length($out) . " bytes total]\n"
+            : $out;
+        die "Error running cmd=@$cmd, stdout:\n$truncated_out\nstderr:\n$err\n";
+    }
     # print STDERR "STDOUT:\n$out\n";
     # print STDERR "STDERR:\n$err\n";
     return ($out, $err);
@@ -783,14 +807,22 @@ sub run_cmd {
 sub params_to_exps {
     my ($params) = @_;
     my @exps;
+
+    # Build a name-to-index lookup from experimental_conditions
+    my %cond_index;
+    my $conditions = $params->{experimental_conditions} // [];
+    for my $i (0 .. $#$conditions) {
+        $cond_index{$conditions->[$i]} = $i;
+    }
+
     for (@{$params->{paired_end_libs}}) {
-        my $index = $_->{condition} - 1;
-        $index = 0 if $index < 0;
+        my $cond = $_->{condition} // '';
+        my $index = exists $cond_index{$cond} ? $cond_index{$cond} : 0;
         push @{$exps[$index]}, [ $_->{read1}, $_->{read2} ];
     }
     for (@{$params->{single_end_libs}}) {
-        my $index = $_->{condition} - 1;
-        $index = 0 if $index < 0;
+        my $cond = $_->{condition} // '';
+        my $index = exists $cond_index{$cond} ? $cond_index{$cond} : 0;
         push @{$exps[$index]}, [ $_->{read} ];
     }
     return \@exps;

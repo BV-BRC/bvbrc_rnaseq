@@ -40,12 +40,11 @@ class Genome:
         self.genome_ref_id = gi
         self.genome_type = gt
         if self.genome_type not in self.valid_genome_types:
-            print(
-                "{0} is not a valid genome type:\n{1}".format(
+            raise ValueError(
+                "{0} is not a valid genome type: {1}".format(
                     self.genome_type, ",".join(self.valid_genome_types)
                 )
             )
-            return None
         self.sample_path_dict = {}
         self.genome_data = {}
         # get genome id prefix
@@ -210,6 +209,7 @@ class Genome:
         except Exception as e:
             sys.stderr.write("Error converting gff to gtf:\n{0}\n".format(e))
             return False
+        return True
 
     def get_genome_database_prefix(self):
         return None
@@ -258,12 +258,11 @@ class Sample:
         self.sample_type = st
         # TODO: change sample type based on SRA single or paired
         if self.sample_type not in self.valid_sample_types:
-            print(
+            raise ValueError(
                 "{0} not a valid sample type: {1}".format(
                     self.sample_type, ",".join(self.valid_sample_types)
                 )
             )
-            return None
         self.reads_list = rl
         self.accession = ac
         self.condition = c

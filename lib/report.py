@@ -257,7 +257,7 @@ class ReportManager:
 
     def create_bad_align_section(self, experiment_dict, genome):
         align_list = []
-        align_list.append("<h2>Alignment Results")
+        align_list.append("<h2>Alignment Results</h2>")
         for condition in experiment_dict:
             for sample in experiment_dict[condition].get_sample_list():
                 if not sample.get_alignment_check():
